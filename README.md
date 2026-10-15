@@ -1,4 +1,5 @@
-https://doi.org/10.5281/zenodo.23404697   
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23404697.svg)](https://doi.org/10.5281/zenodo.23404697)
+
 
 # WUI Mapping Tool
 
