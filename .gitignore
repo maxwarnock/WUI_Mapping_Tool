@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+
+# Outputs generated on each run
+steps/
+results/
+cache/
+
+# Data produced by download_data.py (large; re-download as needed)
+data/nlcd_*_*.tif*
+data/BUPL_*.tif*
+data/_*
+
+# ArcGIS lock and auxiliary files
+*.lock
+*.sr.lock
+
+# Editor and local tool settings
+.vscode/
+.claude/
+
+# SILVIS shapefiles produced by download_data.py --silvis
+silvis_data/

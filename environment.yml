@@ -1,0 +1,14 @@
+# Environment for download_data.py (NLCD, HISDAC-US BUPL, and SILVIS downloads).
+# The mapping tool itself runs in a clone of ArcGIS Pro's arcgispro-py3
+# environment instead; see the README.
+#
+#   conda env create -f environment.yml
+#   conda activate wui_data_download
+name: wui_data_download
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - geopandas
+  - rasterio
+  - requests

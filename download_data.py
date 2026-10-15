@@ -42,6 +42,8 @@ Usage:
         (prompts interactively for which state and year to download)
     python download_data.py --state CO --year 2020
         (non-interactive, for scripting)
+    python download_data.py --state CO --year 2020 --silvis
+        (also downloads the SILVIS Lab WUI map for validation)
 *********************************************'''
 
 import argparse
@@ -69,6 +71,13 @@ HISDAC_BUPL_DOWNLOAD_URL = f"https://dataverse.harvard.edu/api/access/datafile/{
 NLCD_COVER_YEARS = [2001, 2004, 2006, 2008, 2011, 2013, 2016, 2019, 2021]
 
 NLCD_WMS_URL = "https://www.mrlc.gov/geoserver/mrlc_download/wms"
+
+# SILVIS Lab WUI change maps (1990-2020, v4), one shapefile per state, used
+# by wui_mapping_tool.py's optional validation step.
+# https://silvis.forest.wisc.edu/data/wui-change/
+SILVIS_DIR = os.path.join(BASE_DIR, "silvis_data")
+SILVIS_BASE_URL = "https://geoserver.silvis.forest.wisc.edu/geodata/wui_change_2020_v4/zip/shp"
+SILVIS_FILE_PATTERN = "{state}_wui_block_1990_2020_change_v4"
 
 # Rough approximation (meters per degree of latitude); longitude is corrected
 # by cos(latitude). Only used to size tile requests in pixels - the final
@@ -448,6 +457,58 @@ def download_bupl(year, out_path, bounds_4326=None):
     shutil.rmtree(extract_dir)
 
 
+def download_silvis(state_abbr):
+    '''Downloads the SILVIS Lab WUI change shapefile (1990-2020, v4) for one
+    state and extracts it into silvis_data/, flattening the archive's
+    top-level folder so the .shp sits directly in silvis_data/. Each file
+    holds all four SILVIS years (1990, 2000, 2010, 2020) as separate
+    fields, so one download covers any year. Skipped if the shapefile is
+    already there. Returns the path to the .shp.'''
+    name = SILVIS_FILE_PATTERN.format(state=state_abbr)
+    shp_path = os.path.join(SILVIS_DIR, f"{name}.shp")
+    if os.path.exists(shp_path):
+        print(f"SILVIS data for {state_abbr} already downloaded: {shp_path}")
+        return shp_path
+
+    os.makedirs(SILVIS_DIR, exist_ok=True)
+    url = f"{SILVIS_BASE_URL}/{name}_shp.zip"
+    zip_path = os.path.join(SILVIS_DIR, f"_{name}.zip")
+    print(f"Downloading SILVIS Lab WUI data for {state_abbr} (this can be several hundred MB for large states)...")
+    with requests.get(url, stream=True, timeout=600) as resp:
+        if resp.status_code == 404:
+            raise FileNotFoundError(f"No SILVIS WUI file found for '{state_abbr}' at {url}")
+        resp.raise_for_status()
+        with open(zip_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                f.write(chunk)
+
+    print("Extracting SILVIS archive...")
+    with zipfile.ZipFile(zip_path) as zf:
+        for member in zf.infolist():
+            if member.is_dir():
+                continue
+            out_file = os.path.join(SILVIS_DIR, os.path.basename(member.filename))
+            with zf.open(member) as src, open(out_file, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+    os.remove(zip_path)
+
+    if not os.path.exists(shp_path):
+        raise FileNotFoundError(f"Extracted the SILVIS archive but {shp_path} was not in it. Check {SILVIS_DIR}.")
+    print(f"Saved SILVIS WUI data to {shp_path}")
+    return shp_path
+
+
+def prompt_yes_no(message):
+    '''Prompts until the user answers yes or no. Returns True for yes.'''
+    while True:
+        raw = input(message).strip().lower()
+        if raw in ("yes", "y"):
+            return True
+        if raw in ("no", "n"):
+            return False
+        print("Please enter yes or no.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Download NLCD + HISDAC-US BUPL data for a state")
     parser.add_argument("--state", help="State name or two-letter abbreviation, e.g. Colorado or CO. "
@@ -461,6 +522,10 @@ def main():
                               "cell size anyway, 90m is a safe default; drop to 30 only for small areas.")
     parser.add_argument("--skip-nlcd", action="store_true", help="Skip the NLCD download step")
     parser.add_argument("--skip-bupl", action="store_true", help="Skip the BUPL download step")
+    parser.add_argument("--silvis", action="store_true",
+                         help="Also download the state's SILVIS Lab WUI map, used by wui_mapping_tool.py's optional "
+                              "validation step. Off by default because the files are large (e.g. ~170 MB for Colorado, "
+                              "~400 MB for California). If --state is omitted, you'll be asked instead.")
     args = parser.parse_args()
 
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -475,7 +540,7 @@ def main():
     # docstrings - feeding wui_mapping_tool.py the full CONUS-wide BUPL raster
     # was found to crash ArcGIS Pro).
     state_geom = None
-    if not args.skip_nlcd or not args.skip_bupl:
+    if not args.skip_nlcd or not args.skip_bupl or args.silvis:
         states = load_state_boundaries()
         if args.state:
             state_geom = select_state(states, args.state)
@@ -484,6 +549,8 @@ def main():
             print(f"Selected {state_geom.iloc[0]['NAME']} ({state_geom.iloc[0]['STUSPS']})")
         else:
             state_geom = prompt_state(states)
+            if not args.silvis:
+                args.silvis = prompt_yes_no("Also download the SILVIS Lab WUI map for validation? (yes/no): ")
 
     state_abbr = state_geom.iloc[0]["STUSPS"] if state_geom is not None else None
 
@@ -500,11 +567,15 @@ def main():
         bounds_4326 = state_geom.geometry.unary_union.bounds if state_geom is not None else None
         download_bupl(bupl_year, bupl_out, bounds_4326=bounds_4326)
 
+    silvis_path = download_silvis(state_abbr) if args.silvis else None
+
     print("Done.")
     if nlcd_year is not None:
         print(f"  NLCD file: data/nlcd_{state_abbr}_{nlcd_year}.tif")
     if bupl_year is not None:
         print(f"  BUPL file: data/BUPL_{state_abbr}_{bupl_year}.tif")
+    if silvis_path is not None:
+        print(f"  SILVIS file: silvis_data/{os.path.basename(silvis_path)}")
     if nlcd_year is not None and bupl_year is not None and nlcd_year != bupl_year:
         print(f"  Note: NLCD ({nlcd_year}) and BUPL ({bupl_year}) are different years since NLCD land cover isn't published annually.")
     print("wui_mapping_tool.py will pick these up automatically (it finds the most recently downloaded files).")

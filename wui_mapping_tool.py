@@ -14,6 +14,7 @@ import arcpy
 from arcpy import env
 import arcpy.sa as sa
 import wui_mapping_module
+import matplotlib.pyplot as plt
 from sklearn.metrics import ConfusionMatrixDisplay
 
 # Workspace defaults to this script's folder. Override by setting the
@@ -161,11 +162,14 @@ print("NLCD final width:",nlcd_final.width)
 print("BUPL final height:",bupl_clipped.height)
 print("BUPL final width:",bupl_clipped.width)
 
-# convert NLCD to numpy array
-nlcd_numpy = arcpy.RasterToNumPyArray(nlcd_final)
-
-# convert BUPL to numpy array
-bupl_numpy = arcpy.RasterToNumPyArray(bupl_clipped)
+# Convert to numpy arrays. nodata_to_value=0 is important: without it,
+# NoData cells (e.g. where MAINTAIN_EXTENT padded the clip for a state whose
+# NLCD and BUPL extents don't perfectly nest - seen with California) come
+# through as a float sentinel like -3.4e38, which overflows the window-sum
+# in wui_mapping_module.circleWindow ("overflow encountered in reduce").
+# 0 is the right fill here: no land cover class / no buildings.
+nlcd_numpy = arcpy.RasterToNumPyArray(nlcd_final, nodata_to_value=0)
+bupl_numpy = arcpy.RasterToNumPyArray(bupl_clipped, nodata_to_value=0)
 
 #check shapes
 print("NLCD array shape:", nlcd_numpy.shape)
@@ -177,8 +181,14 @@ cellSize = bupl_clipped.meanCellHeight
 # find the lower left point of the BUPL raster
 lowLeftPnt = bupl_clipped.extent.lowerLeft
 
-# select vegetation from NLCD array
-vegetation = np.where((nlcd_numpy==41)|(nlcd_numpy==42)|(nlcd_numpy==43)|(nlcd_numpy==51)|(nlcd_numpy==52)|(nlcd_numpy==71), 1, 0)
+# Select wildland vegetation from the NLCD array, following the Radeloff/SILVIS
+# definition: forest (41-43), shrub/scrub (51-52), grassland/herbaceous (71),
+# and wetlands (90 woody, 95 emergent herbaceous). Agriculture (81, 82) is
+# deliberately left out, as in SILVIS.
+# Note: vegWUISelectNLCD() (the optional Q1 veg-class sub-mapping) still splits
+# only forest vs shrubland and does not place wetlands in either bucket, so
+# wetland-dominated WUI won't receive a forest/shrub tag in wui_veg output.
+vegetation = np.where((nlcd_numpy==41)|(nlcd_numpy==42)|(nlcd_numpy==43)|(nlcd_numpy==51)|(nlcd_numpy==52)|(nlcd_numpy==71)|(nlcd_numpy==90)|(nlcd_numpy==95), 1, 0)
 vegetation_save = arcpy.NumPyArrayToRaster(vegetation, lowLeftPnt,cellSize,cellSize)
 vegetation_save.save('steps/vegetation.tif')
 
@@ -214,15 +224,23 @@ radius = wui_mapping_module.promptInt("Enter radius size:", default=2)
 #run the moving window function (circleWindow)
 result = wui_mapping_module.circleWindow(classList,classListOut,classListNames,radius)
 
-#Select developed areas with at least x buildings per moving window radius size
+#Select developed areas that meet a minimum built-up density.
+# developed_win is the moving-window MEAN BUPL count per raster cell. To compare
+# it against the Radeloff/SILVIS threshold (6.17 = ~1 housing unit per 40 acres),
+# which is expressed per SQUARE KILOMETRE, we first divide by the cell area in
+# km^2. Previously the per-cell mean was compared directly to 6.17, which for
+# 250 m cells (0.0625 km^2) is ~16x too strict and badly under-mapped
+# low-density / exurban WUI.
 print("---Question 3---")
-print("Choose threshold for minimum number of buildings per cell:")
-print("Standard threshold: 6.17")
-print("Alternative threshold: 1")
+print("Choose minimum built-up density in buildings per square km.")
+print("Standard threshold: 6.17  (Radeloff/SILVIS minimum, ~1 unit per 40 acres)")
+print("Higher values restrict the map to denser development.")
 building_threshold = wui_mapping_module.promptFloat("Enter threshold:", default=6.17)
 
-developed_win = result[0] #select bupl moving window result
-developed_select = np.where((developed_win >= building_threshold), 1, 0) #select areas >= threshold
+developed_win = result[0]  # BUPL moving-window mean, in built-up locations per cell
+cell_area_km2 = (cellSize / 1000.0) ** 2
+developed_per_km2 = developed_win / cell_area_km2
+developed_select = np.where((developed_per_km2 >= building_threshold), 1, 0)
 developed_select_to_raster = arcpy.NumPyArrayToRaster(developed_select, lowLeftPnt,cellSize,cellSize)
 developed_select_to_raster.save('steps/developed_select.tif')
 
@@ -237,12 +255,14 @@ print("Choose vegetation areas greater than x percent for intermix criteria")
 print("Standard percentage: 50")
 veggie_percent_g = wui_mapping_module.promptFloat("Enter percent value:", default=50)
 veggie_percent_convert_g = veggie_percent_g *0.01
-# Select areas greater than input
+# Intermix uses >= the threshold; interface (below) uses strictly < the
+# threshold, so the two are mutually exclusive and a cell at exactly the cutoff
+# is intermix only. SILVIS: intermix is >=50% wildland veg, interface is <50%.
 vegetation_select_greater = np.where((vegetation_win >= veggie_percent_convert_g), 1, 0)
 vegetation_select_to_raster_greater = arcpy.NumPyArrayToRaster(vegetation_select_greater, lowLeftPnt,cellSize,cellSize)
 vegetation_select_to_raster_greater.save('steps/vegetation_greater.tif')
-# Select areas less than input
-vegetation_select_less = numpy.where((vegetation_win <= veggie_percent_convert_g), 1, 0)
+# Select areas strictly below the threshold (see note above)
+vegetation_select_less = numpy.where((vegetation_win < veggie_percent_convert_g), 1, 0)
 vegetation_select_to_raster_less = arcpy.NumPyArrayToRaster(vegetation_select_less, lowLeftPnt,cellSize,cellSize)
 vegetation_select_to_raster_less.save('steps/vegetation_less.tif')
 print("Selections completed \nEnd of steps 1 and 2")
@@ -342,15 +362,18 @@ print("WUI interface map complete")
 # Class value 1 = interface
 # Class value 2 = intermix
 # Save to results folder
-wui_intermix_reclass = numpy.where((wui_intermix_select == 1), 2, 0)
-wui_class_combine = wui_intermix_reclass + wui_interface_select
+# Assign explicitly with intermix taking precedence, rather than adding the two
+# (2 + 1 = 3 would be an undefined class). With the mutually exclusive veg split
+# above this is belt-and-suspenders, but it stays correct if that changes.
+wui_class_combine = numpy.where(wui_intermix_select == 1, 2,
+                                numpy.where(wui_interface_select == 1, 1, 0))
 wui_class_combine_r = arcpy.NumPyArrayToRaster(wui_class_combine, lowLeftPnt,cellSize,cellSize)
 wui_class_combine_r.save(f'results/wui{RESULT_TAG}.tif')
 
 print("***************************************")
 print("***Summarizing User Input parameters***")
 print("Moving window radius:",radius)
-print("Minimum building threshold:",building_threshold)
+print("Minimum built-up density (buildings per square km):",building_threshold)
 print("Vegetation cover selection greater than",veggie_percent_g,"percent")
 print("Vegetation % coverage for 'large vegetation areas",large_veg_percent,"percent")
 print("Vegetation region group selection of:",sq_km,"square km")
@@ -371,7 +394,7 @@ while True:
     question8 = wui_mapping_module.promptYesNo("Enter yes/no:")
     if question8 == 'yes':
         print("Working on comparison statistics...")
-        silvis_intermix, silvis_interface = wui_mapping_module.compareWUIMaps(cellSize, lowLeftPnt, wui_intermix_select, wui_interface_select,bupl,bupl_clipped)
+        silvis_intermix, silvis_interface = wui_mapping_module.compareWUIMaps(cellSize, lowLeftPnt, wui_intermix_select, wui_interface_select,bupl,bupl_clipped,_result_state,_result_year)
         print("---Question 9---")
         print("Do you want to use SKLearn to recompute statistics and a \n"
               "confusion matrix to compare your WUI map to the SILVIS WUI map?")
@@ -381,7 +404,8 @@ while True:
             cMatrix = wui_mapping_module.computeConfusionMatrixWUI(wui_intermix_select, wui_interface_select, silvis_intermix, silvis_interface)
             disp = ConfusionMatrixDisplay(confusion_matrix=cMatrix, display_labels=["Positive", "Negative"])
             disp_plot = disp.plot()
-            print("confusion matrix completed")
+            print("confusion matrix completed (close the plot window to finish)")
+            plt.show()
             print("ending script")
         break
     else:

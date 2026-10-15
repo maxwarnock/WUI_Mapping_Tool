@@ -4,6 +4,7 @@ Date: 5/3/2025
 GEOG 4303 Final Project
 WUI Mapping Module - Module for better function organization
 *********************************************'''
+import glob
 import os
 import arcpy
 import arcpy.sa as sa
@@ -93,29 +94,73 @@ def circleWindow(classList, classListOut, classListNames, radius):
     print("Circular moving windows complete")
     return classListOut
 
-def compareWUIMaps(cellSize,lowLeftPnt,wui_intermix_select,wui_interface_select,bupl,bupl_clipped):
-    '''This function compares the output WUI map to an input
-    WUI map from the SILVIS lab. You should compare a SILVIS map
-    with an approximately corresponding date to the WUI map you
-    created. This function prepares and clips the SILVIS data for you. Therefore,
-    you just have to download correct SILVIS data at the link below, and
-    input it in the 'silvis_data' folder. We convert the rasters to numpy arrays,
-    combine intermix and interface, add them, and calculate
-    statistics of agreement between the two maps. '''
+# SILVIS stores each map year as its own field. Shapefile field names are
+# limited to 10 characters, which is why the 2010 and 2020 names look odd.
+SILVIS_YEAR_FIELDS = {1990: 'WUICLASS19', 2000: 'WUICLASS20', 2010: 'WUICLASS_1', 2020: 'WUICLASS_2'}
+
+# SILVIS WUI classes (intermix and interface at three housing densities).
+SILVIS_WUI_CLASSES = ['High_Dens_Interface', 'High_Dens_Intermix', 'Low_Dens_Interface',
+                      'Low_Dens_Intermix', 'Med_Dens_Interface', 'Med_Dens_Intermix']
+
+def findSilvisShapefile(state=None):
+    '''Finds the SILVIS shapefile to compare against, in silvis_data/.
+    Set the WUI_SILVIS_PATH environment variable to an exact path to choose
+    a specific file. Otherwise this uses the file for the given state (as
+    downloaded by "download_data.py --silvis"), or the most recently
+    modified SILVIS shapefile if no state is known.'''
+    override = os.environ.get("WUI_SILVIS_PATH")
+    if override:
+        return override
+
+    silvis_dir = os.path.join(arcpy.env.workspace, 'silvis_data')
+    pattern = f"{state}_wui_block_*.shp" if state else "*_wui_block_*.shp"
+    matches = glob.glob(os.path.join(silvis_dir, pattern))
+    if not matches:
+        state_arg = state if state else "XX"
+        raise FileNotFoundError(
+            f"No SILVIS shapefile matching '{pattern}' found in silvis_data/. Download one with "
+            f"'python download_data.py --state {state_arg} --skip-nlcd --skip-bupl --silvis', "
+            f"or set WUI_SILVIS_PATH to an exact file path.")
+    return max(matches, key=os.path.getmtime)
+
+def compareWUIMaps(cellSize,lowLeftPnt,wui_intermix_select,wui_interface_select,bupl,bupl_clipped,state=None,year=None):
+    '''This function compares the output WUI map to a SILVIS Lab WUI map.
+    It finds the SILVIS shapefile for your state in the 'silvis_data' folder
+    (download it with "download_data.py --silvis"), uses the SILVIS map year
+    closest to your input data's year, and prepares and clips the SILVIS data
+    for you. We convert the rasters to numpy arrays, combine intermix and
+    interface, add them, and calculate statistics of agreement between the
+    two maps. '''
 
     # COMPARISON TO SILVIS WUI
     # STEP 1: DATA PREPARATION
-    # Download SILVIS data for area of interest: https://silvis.forest.wisc.edu/data/wui-change/
-    # Put SILVIS data in the silvis_data folder
-    # Define the shapefile, relative to the current arcpy workspace
-    silvis = os.path.join(arcpy.env.workspace, 'silvis_data', 'CA_wui_block_1990_2020_LA.shp')
+    silvis = findSilvisShapefile(state)
 
-    # Select areas of WUI from the shapefile for 2020
-    #WUICLASS_2 is for year 2020. You should change this field if you want a different year.
-    SILVIS_select = arcpy.analysis.Select(silvis, "steps/SILVIS_WUI_Select.shp","WUICLASS_2 = 'High_Dens_Interface' Or WUICLASS_2 = 'High_Dens_Intermix' Or WUICLASS_2 = 'Low_Dens_Interface' Or WUICLASS_2 = 'Low_Dens_Intermix' Or WUICLASS_2 = 'Med_Dens_Interface' Or WUICLASS_2 = 'Med_Dens_Intermix'")
+    # SILVIS maps exist for 1990, 2000, 2010, and 2020. Use the closest one.
+    silvis_year = min(SILVIS_YEAR_FIELDS, key=lambda y: abs(y - year)) if year else 2020
+    field = SILVIS_YEAR_FIELDS[silvis_year]
+    print(f"Comparing to SILVIS {silvis_year} WUI map: {os.path.basename(silvis)}")
+
+    # Select areas of WUI from the shapefile for the chosen year
+    where = " Or ".join(f"{field} = '{c}'" for c in SILVIS_WUI_CLASSES)
+    SILVIS_select = arcpy.analysis.Select(silvis, "steps/SILVIS_WUI_Select.shp", where)
 
     # Convert the polygon to raster
-    arcpy.conversion.PolygonToRaster(SILVIS_select, "WUICLASS_2", "steps/SILVIS_WUI_Raster.tif","CELL_CENTER", "NONE", cellSize)
+    arcpy.conversion.PolygonToRaster(SILVIS_select, field, "steps/SILVIS_WUI_Raster.tif","CELL_CENTER", "NONE", cellSize)
+
+    # PolygonToRaster assigns its own integer code to each class name, so read
+    # the raster attribute table to find which codes are intermix/interface
+    # rather than assuming a fixed order.
+    vat_fields = [f.name for f in arcpy.ListFields("steps/SILVIS_WUI_Raster.tif")]
+    class_field = next(f for f in vat_fields if f.upper() not in ("OID", "OBJECTID", "VALUE", "COUNT"))
+    intermix_codes, interface_codes = [], []
+    with arcpy.da.SearchCursor("steps/SILVIS_WUI_Raster.tif", ["Value", class_field]) as cursor:
+        for value, wui_class in cursor:
+            if wui_class.endswith("Intermix"):
+                intermix_codes.append(value)
+            elif wui_class.endswith("Interface"):
+                interface_codes.append(value)
+
     # Make sure projections match
     arcpy.management.ProjectRaster("steps/SILVIS_WUI_Raster.tif", 'steps/silvis_reproject.tif', bupl.spatialReference, "NEAREST",cellSize)
     silvis_raster_reproj = sa.Raster("steps/silvis_reproject.tif")
@@ -124,18 +169,18 @@ def compareWUIMaps(cellSize,lowLeftPnt,wui_intermix_select,wui_interface_select,
     silvis_ext_mask = sa.ExtractByMask(silvis_raster_reproj, bupl_clipped)
     silvis_ext_mask.save("steps/silvis_final.tif")
 
-    # convert to numpy array
-    silvis_numpy = arcpy.RasterToNumPyArray(silvis_ext_mask)
+    # convert to numpy array (-1 for NoData, which is never a class code)
+    silvis_numpy = arcpy.RasterToNumPyArray(silvis_ext_mask, nodata_to_value=-1)
 
     # select intermix
-    silvis_intermix = numpy.where((silvis_numpy == 1) | (silvis_numpy == 2) | (silvis_numpy == 3), 1, 0)
+    silvis_intermix = numpy.where(numpy.isin(silvis_numpy, intermix_codes), 1, 0)
 
     # convert intermix back to raster
     silvis_intermix_raster = arcpy.NumPyArrayToRaster(silvis_intermix, lowLeftPnt, cellSize, cellSize)
     silvis_intermix_raster.save('steps/silvis_intermix.tif')
 
     # select interface
-    silvis_interface = numpy.where((silvis_numpy == 4) | (silvis_numpy == 5) | (silvis_numpy == 6), 1, 0)
+    silvis_interface = numpy.where(numpy.isin(silvis_numpy, interface_codes), 1, 0)
 
     # convert interface back to raster
     silvis_interface_raster = arcpy.NumPyArrayToRaster(silvis_interface, lowLeftPnt, cellSize, cellSize)
