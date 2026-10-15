@@ -1,6 +1,6 @@
 # WUI Mapping Tool
 
-A Python tool for mapping the **Wildland-Urban Interface (WUI)** anywhere in the contiguous United States. It combines building density from [HISDAC-US](https://doi.org/10.7910/DVN/U2P66Z) historical built-up property records with vegetation from the [National Land Cover Database (NLCD)](https://www.mrlc.gov/), and classifies WUI **intermix** and **interface** zones following the Radeloff/SILVIS methodology. Results can optionally be validated against [SILVIS Lab](https://silvis.forest.wisc.edu/data/wui-change/) WUI maps.
+A Python tool for mapping the Wildland-Urban Interface (WUI) anywhere in the contiguous United States. It combines building density from [HISDAC-US](https://doi.org/10.7910/DVN/U2P66Z) historical built-up property records with vegetation from the [National Land Cover Database (NLCD)](https://www.mrlc.gov/), and classifies WUI intermix and interface zones following the Radeloff/SILVIS methodology. Results can optionally be validated against [SILVIS Lab](https://silvis.forest.wisc.edu/data/wui-change/) WUI maps.
 
 Developed by Max Warnock, Quin Browder, and Victoria Madden for GEOG 4303 at the University of Colorado Boulder (Spring 2025). See the [project paper](docs/wui_mapping_paper.pdf) for methods and results.
 
