@@ -3,11 +3,11 @@
 
 # WUI Mapping Tool
 
-A Python tool for mapping the Wildland-Urban Interface (WUI) anywhere in the contiguous United States. It combines building density from [HISDAC-US](https://doi.org/10.7910/DVN/U2P66Z) historical built-up property records with vegetation from the [National Land Cover Database (NLCD)](https://www.mrlc.gov/), and classifies WUI intermix and interface zones following the Radeloff/SILVIS methodology. Results can optionally be validated against [SILVIS Lab](https://silvis.forest.wisc.edu/data/wui-change/) WUI maps.
+A Python tool for mapping the Wildland-Urban Interface (WUI) anywhere in the contiguous United States. It combines building density from [HISDAC-US](https://doi.org/10.7910/DVN/U2P66Z) historical built-up property records with vegetation data from the [National Land Cover Database (NLCD)](https://www.mrlc.gov/), and classifies WUI intermix and interface zones following the Radeloff/SILVIS methodology. Results can optionally be validated against [SILVIS Lab](https://silvis.forest.wisc.edu/data/wui-change/) WUI maps.
 
-The initial tool was developed by Max Warnock, Quin Browder, and Victoria Madden for GEOG 4303 at CU Boulder (Spring 2025). See the [project paper](docs/wui_mapping_paper.pdf) for methods and results as of May 2025. I have since added additional features and improvements, such as automatic downloads for anywhere in the country, and fixes for some of the WUI mapping calculations and SILVIS map comparisons. 
+The initial tool was developed by Max Warnock, Quin Browder, and Victoria Madden for GEOG 4303 at CU Boulder (Spring 2025). See the [project paper](docs/wui_mapping_paper.pdf) for methods and results as of May 2025. I (Max) have since added additional features and improvements, such as automatic downloads for anywhere in the country, and fixes for some of the WUI mapping calculations and SILVIS map comparisons. 
 
-![WUI map of Colorado's Northern Front Range, with intermix in red and interface in orange](docs/images/front_range_wui.jpg)
+![WUI map](docs/images/front_range_wui.jpg)
 
 *WUI map of Colorado's Northern Front Range, from Fort Collins to Castle Rock. Intermix (red) is housing mixed into wildland vegetation, and interface (orange) is housing next to large vegetated areas.*
 
