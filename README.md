@@ -76,7 +76,7 @@ This saves `data/nlcd_CO_2019.tif`, `data/BUPL_CO_2020.tif`, and the SILVIS Lab 
 | `--state` | State name or two-letter abbreviation |
 | `--year` | Year to download |
 | `--resolution` | NLCD resolution in meters (default: 90). Only use 30 for small states, since downloading a whole state at 30 m can run out of memory. |
-| `--silvis` | Also download the state's SILVIS Lab WUI map. This is off by default because the files are large (about 170 MB for Colorado and 400 MB for California). |
+| `--silvis` | Also download the state's SILVIS Lab WUI map. This is off by default because the files are large. |
 | `--skip-nlcd`, `--skip-bupl` | Skip downloading NLCD or BUPL, for example if you only need the SILVIS map |
 
 ### 2. Run the mapping tool
@@ -93,9 +93,9 @@ The tool uses the most recently downloaded `nlcd_*.tif` and `BUPL_*.tif` files i
 |---|---|---|---|
 | 1 | Also produce a WUI map split by vegetation class? | | Extra output |
 | 2 | Moving window radius (1 = 250 m) | 2 | Intermix and interface |
-| 3 | Minimum building density (buildings per km²) | 6.17 | Intermix and interface |
+| 3 | Minimum building density (buildings per km^2) | 6.17 | Intermix and interface |
 | 4 | Minimum wildland vegetation for intermix (%) | 50 | Intermix |
-| 5 | Minimum size of a large vegetated area (km²) | 5 | Interface |
+| 5 | Minimum size of a large vegetated area (km^2) | 5 | Interface |
 | 6 | Minimum vegetation cover in large vegetated areas (%) | 75 | Interface |
 | 7 | Buffer distance around large vegetated areas (km) | 2.4 | Interface |
 | 8 | Compare the result to a SILVIS Lab WUI map? | | Validation |
@@ -155,6 +155,3 @@ The comparison uses SILVIS as the reference and scores each cell as WUI or non-W
 - Bar-Massada, A., Stewart, S. I., Hammer, R. B., Mockrin, M. H., and Radeloff, V. C. (2013). Using structure locations as a basis for mapping the wildland urban interface. *Journal of Environmental Management*, 128, 540-547. https://www.fs.usda.gov/rm/pubs_other/rmrs_2013_bar_masada_a001.pdf
 - Radeloff, V. C., Helmers, D. P., Kramer, H. A., et al. (2018). Rapid growth of the US wildland-urban interface raises wildfire risk. *Proceedings of the National Academy of Sciences*, 115(13), 3314-3319. https://doi.org/10.1073/pnas.1718850115
 
-## License
-
-This project is licensed under the [MIT License](LICENSE.md).
