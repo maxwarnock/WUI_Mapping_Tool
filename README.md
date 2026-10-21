@@ -13,20 +13,20 @@ The initial tool was developed by Max Warnock, Quin Browder, and Victoria Madden
 
 ## Features
 
-- Downloads NLCD land cover and HISDAC-US built-up property locations (BUPL) for any state and year, plus SILVIS Lab WUI maps if you want them
-- Adjustable WUI criteria (moving window radius, housing density threshold, vegetation thresholds, and buffer distance), with standard values suggested at each prompt
-- Intermix and interface classification using circular moving windows
-- Optional WUI map split by forest and shrubland cover
+- Downloads NLCD land cover and HISDAC-US built-up property locations (BUPL) for any state and year, plus SILVIS Lab WUI maps (optional)
+- Adjustable WUI criteria (moving window radius, housing density threshold, vegetation thresholds, and buffer distance), with standard values suggested at each prompt when running the script
+- Intermix and interface classification
+- Optional vegetation WUI map representing WUI areas of predominantly forest or shrubland cover
 - Comparison to SILVIS Lab maps with accuracy, precision, recall, F1, and a confusion matrix
 - ArcGIS Pro layer files (.lyrx) for map symbology
 
-## How it works
+## Workflow
 
-1. NLCD is reprojected and resampled to the BUPL grid (about 250 m), and BUPL is clipped to the NLCD study area.
-2. A circular moving window calculates the share of wildland vegetation and the building density around each cell. Wildland vegetation includes the NLCD forest, shrubland, grassland, and wetland classes. Agriculture is left out, as in SILVIS.
-3. Cells below the minimum building density are removed. The standard value is 6.17 buildings per km², or about 1 housing unit per 40 acres.
+1. NLCD is reprojected and resampled to the BUPL grid (about 250 m), and BUPL is clipped to the NLCD study area. We do lose resolution from this, and the final WUI output cell size is 250m. However, the BUPL data provides trusted historical records of building data which is valuable for this tool.
+2. A circular moving window calculates the share of wildland vegetation and the building density around each cell. Wildland vegetation includes the NLCD forest, shrubland, grassland, and wetland classes. Agriculture is left out, as in SILVIS methodolgy.
+3. Cells below the minimum building density are removed. The standard value is 6.17 buildings per km^2, or about 1 housing unit per 40 acres.
 4. Cells with at least 50% wildland vegetation (the standard value) are classified as intermix.
-5. Cells with less vegetation are classified as interface if they fall within 2.4 km of a large vegetated area. By default, a large vegetated area is at least 5 km² with at least 75% vegetation.
+5. Cells with less vegetation are classified as interface if they fall within 2.4 km of a large vegetated area. By default, a large vegetated area is at least 5 km^2 with at least 75% vegetation.
 
 ## Requirements
 
@@ -51,7 +51,7 @@ activate wui_mapping
 conda install scikit-learn
 ```
 
-### Download environment
+### Data download environment
 
 This environment runs `download_data.py`:
 
