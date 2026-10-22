@@ -10,42 +10,10 @@ on. Run this script in its own environment (see README below), then
 run wui_mapping_tool.py in the arcpy environment as usual, pointing it
 at the files this script produces.
 
-NLCD is fetched via a direct WMS GetMap request rather than through
-the pygeohydro package. pygeohydro's nlcd_bygeom() goes through
-pygeoutils.gtiff2xarray(), which was found (by isolating the crash
-step by step) to return a lazily-loaded rioxarray DataArray backed by
-a rasterio MemoryFile that gets closed before the pixel data is ever
-read - a use-after-free that segfaults the process nondeterministically
-rather than raising a catchable Python exception. Fetching tiles
-directly and reading them into a plain numpy array while the
-MemoryFile is still open (proven safe here) avoids that code path
-entirely.
 
-BUPL is distributed as a single CONUS-wide raster (~214 million cells).
-Feeding that directly to arcpy's sa.ExtractByRectangle() alongside a
-state-sized raster was found to reliably crash ArcGIS Pro's Python
-(STATUS_HEAP_CORRUPTION, 0xC0000374 - reproduced with a minimal script
-and confirmed to match the fault signature of the real crash). BUPL is
-now clipped to the target state's bounding box (with a buffer) here,
-before wui_mapping_tool.py ever sees it, which avoids that code path.
-The clip also avoids rasterio.windows.from_bounds(), which - like
-rasterio.merge.merge() - was independently found to hard-crash this
-environment's rasterio 1.4.4 build; the window is computed with plain
-arithmetic on the affine transform instead (verified safe).
-
-Setup (one time):
-    conda create -n wui_data_download -c conda-forge python=3.11 geopandas rasterio requests -y
-    conda activate wui_data_download
-
-Usage:
-    python download_data.py
-        (prompts interactively for which state and year to download)
-    python download_data.py --state CO --year 2020
-        (non-interactive, for scripting)
-    python download_data.py --state CO --year 2020 --silvis
-        (also downloads the SILVIS Lab WUI map for validation)
 *********************************************'''
 
+# import libraries
 import argparse
 import io
 import math
@@ -80,13 +48,11 @@ SILVIS_BASE_URL = "https://geoserver.silvis.forest.wisc.edu/geodata/wui_change_2
 SILVIS_FILE_PATTERN = "{state}_wui_block_1990_2020_change_v4"
 
 # Rough approximation (meters per degree of latitude); longitude is corrected
-# by cos(latitude). Only used to size tile requests in pixels - the final
-# raster gets resampled to BUPL's grid downstream anyway, so this doesn't
-# need to be geodetically precise.
+# by cos(latitude). Only used to size tile requests in pixels
+# the final raster gets resampled to BUPL's grid downstream anyway
 METERS_PER_DEGREE_LAT = 111_320
 
-# Keep each individual WMS request comfortably small (fast, low memory,
-# unlikely to hit server-side limits) - tiles are mosaicked locally afterward.
+# Keep each individual WMS request small enough
 MAX_PIXELS_PER_TILE = 4_000_000
 
 
@@ -171,21 +137,8 @@ def _split_bbox(bounds, resolution):
 
 def _fetch_nlcd_tile(bbox, year, deg_per_px_lon, deg_per_px_lat):
     '''Fetches one NLCD land cover tile via a direct WMS GetMap request
-    and reads it into a plain numpy array. Returns (array, transform, crs, profile).
+    and reads it into a plain numpy array. Returns (array, transform, crs, profile).'''
 
-    deg_per_px_lon/lat must be the same for every tile in a mosaic (computed
-    once for the whole area by download_nlcd) - using a per-tile latitude to
-    derive these, instead of one shared value, produces tiles with slightly
-    different pixel widths that don't share a common grid.
-
-    This deliberately bypasses pygeohydro.nlcd_bygeom(), which goes
-    through pygeoutils.gtiff2xarray() - found (by isolating the crash
-    step by step) to return a lazily-loaded rioxarray DataArray backed
-    by a rasterio MemoryFile that gets closed before the pixel data is
-    ever read, a use-after-free that segfaults nondeterministically
-    rather than raising a catchable Python exception. Reading the array
-    eagerly while the MemoryFile is still open (as done here) avoids
-    that code path entirely - verified safe through direct testing.'''
     import rasterio as rio
 
     minx, miny, maxx, maxy = bbox
@@ -218,14 +171,8 @@ def _fetch_nlcd_tile(bbox, year, deg_per_px_lon, deg_per_px_lat):
 
 def _mosaic_tiles(tile_paths, out_path):
     '''Mosaics a list of non-overlapping, same-resolution GeoTIFF tiles
-    into out_path by placing each tile's array directly into a
-    pre-allocated numpy array at its geographic offset.
+    into out_path by placing each tile's array directly into a  numpy array at its geographic offset. '''
 
-    This deliberately avoids rasterio.merge.merge(), which was found
-    (by isolating the crash on minimal synthetic tiles, unrelated to
-    NLCD or the network) to hard-crash the process in this environment
-    (rasterio 1.4.4) regardless of tile alignment or content - a bug in
-    that function's own native code, not in the tiling logic here.'''
     import rasterio
     import numpy as np
     from rasterio.transform import from_origin
@@ -265,25 +212,12 @@ def _mosaic_tiles(tile_paths, out_path):
         dst.write(mosaic)
 
 
-# HISDAC-US BUPL's CRS - "USA_Contiguous_Albers_Equal_Area_Conic_USGS_version".
-# The working LA sample data that shipped with this repo was already in this
-# CRS (as raw WKT, not this ESRI code, but numerically identical: same standard
-# parallels/center). NLCD fetched via the WMS above comes back in EPSG:4326
-# (geographic degrees) and untiled/striped, unlike that sample. Feeding
-# wui_mapping_tool.py a geographic-CRS, untiled raster and making its
-# ProjectRaster call do a real geographic-to-projected transform (instead of
-# the near-no-op the pre-reprojected sample required) is suspected to be why
-# ProjectRaster crashes intermittently there but never in isolated testing
-# here - see conversation history. Reprojecting NLCD to this CRS and tiling it
-# here, matching the sample's format, avoids relying on that ArcGIS code path.
 NLCD_TARGET_CRS = "ESRI:102039"
 
 
 def _reproject_to_crs(src_path, dst_path, dst_crs):
-    '''Reprojects src_path to dst_crs and writes a tiled GeoTIFF to dst_path,
-    matching the format of the original working sample data (see
-    NLCD_TARGET_CRS docstring above). Verified safe in isolated testing,
-    unlike rasterio.merge.merge()/windows.from_bounds() elsewhere in this file.'''
+    '''Reprojects src_path to dst_crs and writes a tiled GeoTIFF to dst_path'''
+
     import rasterio
     from rasterio.warp import calculate_default_transform, reproject, Resampling
 
@@ -312,16 +246,13 @@ def _reproject_to_crs(src_path, dst_path, dst_crs):
 
 def download_nlcd(state_geom, year, out_path, resolution=30):
     '''Downloads NLCD land cover clipped to state_geom's bounding box, at
-    the given resolution (meters), and writes it to out_path. NLCD land
-    cover is only published for specific survey years (see
-    NLCD_COVER_YEARS), so this snaps the requested year to the nearest
-    available one and returns the year actually used.
+    the given resolution (meters), and writes it to out_path. 
 
     Note: this clips to the state's bounding box, not its exact polygon
     boundary, so the output includes small slivers of neighboring states
     near the corners. wui_mapping_tool.py resamples this raster down to
-    BUPL's ~250m cell size anyway, so the coarser resolution used here
-    loses nothing downstream.'''
+    BUPL's ~250m cell size.'''
+
     actual_year = min(NLCD_COVER_YEARS, key=lambda y: abs(y - year))
     if actual_year != year:
         print(f"NLCD land cover isn't published for {year}; using the nearest available year, {actual_year}, instead.")
@@ -366,14 +297,8 @@ def download_nlcd(state_geom, year, out_path, resolution=30):
 
 def _clip_raster_to_bounds(src_path, bounds_4326, out_path, buffer_deg=0.5):
     '''Clips src_path (any CRS) down to bounds_4326 (minx, miny, maxx, maxy
-    in EPSG:4326), padded by buffer_deg, using a windowed read - only the
-    needed portion of the source file is ever touched, so this is fast and
-    memory-light even for a huge source raster.
+    in EPSG:4326).'''
 
-    Deliberately avoids rasterio.windows.from_bounds(), which - like
-    rasterio.merge.merge() - was found to hard-crash this environment's
-    rasterio 1.4.4 build. The pixel window is computed with plain
-    arithmetic on the affine transform instead (verified safe).'''
     import rasterio
     from rasterio.windows import Window
     from pyproj import Transformer
@@ -414,8 +339,8 @@ def download_bupl(year, out_path, bounds_4326=None):
     extracts it, and saves the requested year's raster to out_path. If
     bounds_4326 (minx, miny, maxx, maxy in EPSG:4326) is given, the
     output is clipped to it (with a buffer) rather than left at the
-    full CONUS extent - see _clip_raster_to_bounds and the module
-    docstring for why this matters (avoids crashing wui_mapping_tool.py).'''
+    full CONUS extent.'''
+
     print("Downloading HISDAC-US BUPL archive (~640 MB, all years, CONUS extent)...")
     tar_path = os.path.join(DATA_DIR, "_BUPL.tar")
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -464,6 +389,7 @@ def download_silvis(state_abbr):
     holds all four SILVIS years (1990, 2000, 2010, 2020) as separate
     fields, so one download covers any year. Skipped if the shapefile is
     already there. Returns the path to the .shp.'''
+
     name = SILVIS_FILE_PATTERN.format(state=state_abbr)
     shp_path = os.path.join(SILVIS_DIR, f"{name}.shp")
     if os.path.exists(shp_path):
@@ -512,9 +438,9 @@ def prompt_yes_no(message):
 def main():
     parser = argparse.ArgumentParser(description="Download NLCD + HISDAC-US BUPL data for a state")
     parser.add_argument("--state", help="State name or two-letter abbreviation, e.g. Colorado or CO. "
-                                         "If omitted, you'll be prompted for it interactively.")
+                                         "If omitted, you'll be prompted for it.")
     parser.add_argument("--year", type=int, help="Year to download for both datasets. "
-                                                  "If omitted, you'll be prompted for it interactively (default: 2020).")
+                                                  "If omitted, you'll be prompted for it (default: 2020).")
     parser.add_argument("--resolution", type=int, default=90,
                          help="NLCD resolution in meters (default: 90). NLCD's native resolution is 30m, "
                               "but requesting a whole state at 30m has been observed to crash the download "
@@ -535,10 +461,9 @@ def main():
     nlcd_year = None
     bupl_year = None
 
-    # State is needed for both steps now: it defines the NLCD request area,
-    # and BUPL gets clipped to it too (see download_bupl/_clip_raster_to_bounds
-    # docstrings - feeding wui_mapping_tool.py the full CONUS-wide BUPL raster
-    # was found to crash ArcGIS Pro).
+    # State is needed for both steps. It defines the NLCD request area,
+    # and BUPL gets clipped to it too 
+    
     state_geom = None
     if not args.skip_nlcd or not args.skip_bupl or args.silvis:
         states = load_state_boundaries()
