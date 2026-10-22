@@ -154,3 +154,7 @@ The comparison uses SILVIS as the reference and scores each cell as WUI or non-W
 
 - Bar-Massada, A., Stewart, S. I., Hammer, R. B., Mockrin, M. H., and Radeloff, V. C. (2013). Using structure locations as a basis for mapping the wildland urban interface. *Journal of Environmental Management*, 128, 540-547. https://www.fs.usda.gov/rm/pubs_other/rmrs_2013_bar_masada_a001.pdf
 - Radeloff, V. C., Helmers, D. P., Kramer, H. A., et al. (2018). Rapid growth of the US wildland-urban interface raises wildfire risk. *Proceedings of the National Academy of Sciences*, 115(13), 3314-3319. https://doi.org/10.1073/pnas.1718850115
+
+## License
+
+This project is licensed under the [MIT License](LICENSE.md).
